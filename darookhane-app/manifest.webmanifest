@@ -1,0 +1,16 @@
+{
+  "name": "داروخانهٔ مجازی بیمارستان امیرالمؤمنین",
+  "short_name": "داروخانه مجازی",
+  "description": "سامانه آموزشی داروخانه و مرور داروهای قلب و فشار خون",
+  "lang": "fa",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F5EFE2",
+  "theme_color": "#1D5A49",
+  "icons": [
+    {"src":"icon-source.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
