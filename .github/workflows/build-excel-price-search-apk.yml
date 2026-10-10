@@ -51,12 +51,15 @@ jobs:
       - name: Apply barcode and image recognition patch
         run: python3 ../.github/scripts/patch_setayesh_barcode_vision.py
 
+      - name: Apply themes fonts and Excel patch
+        run: python3 ../.github/scripts/patch_setayesh_settings_excel.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: System-Setayesh-Accessories-APK
+          name: System-Setayesh-Themes-Fonts-Excel-APK
           path: excel-price-search/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
