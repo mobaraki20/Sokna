@@ -8,7 +8,9 @@ import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class AppDb extends SQLiteOpenHelper {
     public static class Product {
@@ -138,19 +140,31 @@ public class AppDb extends SQLiteOpenHelper {
         } finally { c.close(); }
     }
 
-    public void replaceProducts(List<Product> items) {
+    public void importProducts(List<Product> items) {
         SQLiteDatabase d = getWritableDatabase();
         d.beginTransaction();
         try {
-            d.delete("products", null, null);
             for (Product p : items) {
+                Cursor c = d.rawQuery("SELECT id,purchase,stock FROM products WHERE name=? COLLATE NOCASE LIMIT 1", new String[]{p.name.trim()});
+                long id = 0;
+                double oldPurchase = 0;
+                int oldStock = 0;
+                try {
+                    if (c.moveToFirst()) {
+                        id = c.getLong(0);
+                        oldPurchase = c.getDouble(1);
+                        oldStock = c.getInt(2);
+                    }
+                } finally { c.close(); }
+
                 ContentValues v = new ContentValues();
-                v.put("name", p.name);
-                v.put("purchase", Math.max(0, p.purchase));
+                v.put("name", p.name.trim());
                 v.put("retail", Math.max(0, p.retail));
                 v.put("wholesale", Math.max(0, p.wholesale));
-                v.put("stock", Math.max(0, p.stock));
-                d.insertOrThrow("products", null, v);
+                v.put("purchase", p.purchase > 0 ? p.purchase : oldPurchase);
+                v.put("stock", p.stock > 0 ? p.stock : oldStock);
+                if (id > 0) d.update("products", v, "id=?", new String[]{String.valueOf(id)});
+                else d.insertOrThrow("products", null, v);
             }
             d.setTransactionSuccessful();
         } finally { d.endTransaction(); }
@@ -187,12 +201,18 @@ public class AppDb extends SQLiteOpenHelper {
         return out;
     }
 
+    private Map<Long, Integer> requiredQty(List<SaleLine> lines) {
+        HashMap<Long, Integer> map = new HashMap<>();
+        for (SaleLine line : lines) map.put(line.productId, map.containsKey(line.productId) ? map.get(line.productId) + line.qty : line.qty);
+        return map;
+    }
+
     public boolean canSell(List<SaleLine> lines) {
         SQLiteDatabase d = getReadableDatabase();
-        for (SaleLine line : lines) {
-            Cursor c = d.rawQuery("SELECT stock FROM products WHERE id=?", new String[]{String.valueOf(line.productId)});
+        for (Map.Entry<Long, Integer> e : requiredQty(lines).entrySet()) {
+            Cursor c = d.rawQuery("SELECT stock FROM products WHERE id=?", new String[]{String.valueOf(e.getKey())});
             try {
-                if (!c.moveToFirst() || c.getInt(0) < line.qty) return false;
+                if (!c.moveToFirst() || c.getInt(0) < e.getValue()) return false;
             } finally { c.close(); }
         }
         return true;
@@ -202,17 +222,18 @@ public class AppDb extends SQLiteOpenHelper {
         SQLiteDatabase d = getWritableDatabase();
         d.beginTransaction();
         try {
-            double total = 0;
-            for (SaleLine line : lines) {
-                Cursor c = d.rawQuery("SELECT stock FROM products WHERE id=?", new String[]{String.valueOf(line.productId)});
-                int stock;
+            Map<Long, Integer> required = requiredQty(lines);
+            for (Map.Entry<Long, Integer> e : required.entrySet()) {
+                Cursor c = d.rawQuery("SELECT name,stock FROM products WHERE id=?", new String[]{String.valueOf(e.getKey())});
                 try {
-                    if (!c.moveToFirst()) throw new Exception("کالا پیدا نشد: " + line.productName);
-                    stock = c.getInt(0);
+                    if (!c.moveToFirst()) throw new Exception("یکی از کالاها پیدا نشد");
+                    int stock = c.getInt(1);
+                    if (stock < e.getValue()) throw new Exception("موجودی کافی نیست: " + c.getString(0) + " (موجودی " + stock + ")");
                 } finally { c.close(); }
-                if (stock < line.qty) throw new Exception("موجودی کافی نیست: " + line.productName + " (موجودی " + stock + ")");
-                total += line.unitPrice * line.qty;
             }
+
+            double total = 0;
+            for (SaleLine line : lines) total += line.unitPrice * line.qty;
 
             ContentValues sale = new ContentValues();
             sale.put("invoice_no", invoiceNo);
@@ -223,8 +244,11 @@ public class AppDb extends SQLiteOpenHelper {
             sale.put("created_at", System.currentTimeMillis());
             long saleId = d.insertOrThrow("sales", null, sale);
 
+            for (Map.Entry<Long, Integer> e : required.entrySet()) {
+                d.execSQL("UPDATE products SET stock=stock-? WHERE id=?", new Object[]{e.getValue(), e.getKey()});
+            }
+
             for (SaleLine line : lines) {
-                d.execSQL("UPDATE products SET stock=stock-? WHERE id=?", new Object[]{line.qty, line.productId});
                 ContentValues item = new ContentValues();
                 item.put("sale_id", saleId);
                 item.put("product_id", line.productId);
