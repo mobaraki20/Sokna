@@ -54,6 +54,9 @@ jobs:
       - name: Apply themes fonts and Excel patch
         run: python3 ../.github/scripts/patch_setayesh_settings_excel.py
 
+      - name: Restore dynamic root UI
+        run: python3 ../.github/scripts/patch_setayesh_settings_fix.py
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
