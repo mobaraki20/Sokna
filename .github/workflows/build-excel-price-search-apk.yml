@@ -45,8 +45,11 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Patch dialog builders
+      - name: Apply Windows 11 UI patch
         run: python3 ../.github/scripts/patch_setayesh_build.py
+
+      - name: Apply barcode and image recognition patch
+        run: python3 ../.github/scripts/patch_setayesh_barcode_vision.py
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
@@ -54,6 +57,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ExcelPriceSearch-APK
+          name: System-Setayesh-Accessories-APK
           path: excel-price-search/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
