@@ -3,6 +3,7 @@ package com.example.excelpricesearch;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.database.sqlite.SQLiteDatabase;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -21,788 +22,152 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.text.DecimalFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
-    private static final int PICK_XLSX = 1001;
-    private static final int SAVE_PDF = 2002;
-
+    private static final int PICK_XLSX=1001, SAVE_PDF=2002, BACKUP_CREATE=3001, BACKUP_RESTORE=3002;
     private AppDb db;
     private LinearLayout content;
-    private Button productsTab, customersTab, invoiceTab;
-
-    private EditText productSearch, customerSearch;
-    private TextView productStatus, customerStatus;
-    private LinearLayout productResults, customerResults, invoiceItemsContainer;
-    private TextView invoiceTotal, selectedCustomerText, invoiceNoText;
-
-    private final ArrayList<AppDb.SaleLine> invoiceItems = new ArrayList<>();
-    private AppDb.Customer selectedCustomer;
-    private String currentInvoiceNo;
-
+    private final ArrayList<AppDb.SaleLine> saleLines=new ArrayList<>();
+    private final ArrayList<AppDb.SaleLine> purchaseLines=new ArrayList<>();
+    private AppDb.Customer saleCustomer;
+    private AppDb.Supplier purchaseSupplier;
+    private AppDb.Visitor saleVisitor;
+    private String saleNo,purchaseNo;
+    private EditText saleDiscount,salePaid,saleAccount,purchaseDiscount,purchasePaid,purchaseAccount;
+    private LinearLayout saleItems,purchaseItems;
+    private TextView saleTotal,purchaseTotal,saleCustomerText,saleVisitorText,purchaseSupplierText;
     private ArrayList<AppDb.SaleLine> pendingPdfLines;
     private AppDb.Customer pendingPdfCustomer;
-    private String pendingPdfInvoiceNo;
+    private String pendingPdfNo;
     private long pendingPdfTime;
 
-    private ArrayList<AppDb.SaleLine> lastSaleLines;
-    private AppDb.Customer lastSaleCustomer;
-    private String lastSaleInvoiceNo;
-    private long lastSaleTime;
+    interface CustomerPick{void picked(AppDb.Customer c);} interface SupplierPick{void picked(AppDb.Supplier s);} interface VisitorPick{void picked(AppDb.Visitor v);} interface ProductPick{void picked(AppDb.Product p);}
 
-    private int currentScreen = 0;
+    @Override protected void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(Color.rgb(35,29,16));db=new AppDb(this);saleNo=newNo("F");purchaseNo=newNo("K");setContentView(buildRoot());showDashboard();}
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.rgb(25, 50, 90));
-        db = new AppDb(this);
-        currentInvoiceNo = newInvoiceNo();
-        setContentView(buildUi());
-        showProductsScreen();
+    private View buildRoot(){
+        LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(12),dp(12),dp(12),dp(10));root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);root.setBackgroundColor(Color.rgb(248,248,246));
+        LinearLayout brand=new LinearLayout(this);brand.setOrientation(LinearLayout.VERTICAL);brand.setPadding(dp(14),dp(10),dp(14),dp(10));brand.setBackground(roundBg(Color.rgb(31,30,27),0,18));
+        TextView t=label("SYSTEM SETAYESH",24,Color.rgb(218,178,73),true);t.setGravity(Gravity.CENTER);brand.addView(t);
+        TextView st=label("خرید، فروش، انبار و حسابداری بازرگانی",12,Color.LTGRAY,false);st.setGravity(Gravity.CENTER);brand.addView(st,lp(-1,-2,0,3,0,0));root.addView(brand,lp(-1,-2,0,0,0,10));
+        content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);root.addView(content,new LinearLayout.LayoutParams(-1,0,1));return root;
     }
 
-    private View buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12), dp(14), dp(12), dp(10));
-        root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.setBackgroundColor(Color.rgb(246, 248, 252));
-
-        TextView title = new TextView(this);
-        title.setText("مدیریت فروش و انبار");
-        title.setTextSize(23);
-        title.setTextColor(Color.rgb(20, 36, 64));
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        title.setGravity(Gravity.RIGHT);
-        root.addView(title, lp(-1, -2, 0, 0, 0, 10));
-
-        LinearLayout tabs = new LinearLayout(this);
-        tabs.setOrientation(LinearLayout.HORIZONTAL);
-        tabs.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-
-        productsTab = new Button(this);
-        productsTab.setText("کالا و انبار");
-        productsTab.setTextSize(12);
-        productsTab.setOnClickListener(v -> showProductsScreen());
-        tabs.addView(productsTab, new LinearLayout.LayoutParams(0, dp(48), 1));
-
-        customersTab = new Button(this);
-        customersTab.setText("مشتریان");
-        customersTab.setTextSize(12);
-        customersTab.setOnClickListener(v -> showCustomersScreen());
-        LinearLayout.LayoutParams ct = new LinearLayout.LayoutParams(0, dp(48), 1);
-        ct.setMargins(dp(5), 0, 0, 0);
-        tabs.addView(customersTab, ct);
-
-        invoiceTab = new Button(this);
-        invoiceTab.setText("فاکتور");
-        invoiceTab.setTextSize(12);
-        invoiceTab.setOnClickListener(v -> showInvoiceScreen());
-        LinearLayout.LayoutParams it = new LinearLayout.LayoutParams(0, dp(48), 1);
-        it.setMargins(dp(5), 0, 0, 0);
-        tabs.addView(invoiceTab, it);
-
-        root.addView(tabs, lp(-1, -2, 0, 0, 0, 10));
-
-        content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
-        updateInvoiceTab();
-        return root;
+    private void showDashboard(){
+        content.removeAllViews();ScrollView sc=new ScrollView(this);LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);sc.addView(box,new ScrollView.LayoutParams(-1,-2));content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));
+        AppDb.Summary s=db.summary();
+        TextView h=label("داشبورد مدیریتی",21,Color.rgb(35,35,35),true);box.addView(h,lp(-1,-2,0,0,0,8));
+        LinearLayout r1=row();r1.addView(metric("فروش کل",money(s.sales)),weight());r1.addView(metric("خرید کل",money(s.purchases)),weightM());box.addView(r1,lp(-1,-2,0,0,0,7));
+        LinearLayout r2=row();r2.addView(metric("مانده نقد/بانک",money(s.cash)),weight());r2.addView(metric("ارزش موجودی",money(s.stockValue)),weightM());box.addView(r2,lp(-1,-2,0,0,0,7));
+        LinearLayout r3=row();r3.addView(metric("مطالبات",money(s.receivables)),weight());r3.addView(metric("بدهی‌ها",money(s.payables)),weightM());box.addView(r3,lp(-1,-2,0,0,0,12));
+        box.addView(label("عملیات",16,Color.DKGRAY,true),lp(-1,-2,0,0,0,5));
+        addMenuRow(box,"کالا و انبار",v->showProducts(),"فروش",v->showSale());
+        addMenuRow(box,"خرید",v->showPurchase(),"مشتریان",v->showCustomers());
+        addMenuRow(box,"تأمین‌کنندگان",v->showSuppliers(),"ویزیتورها",v->showVisitors());
+        addMenuRow(box,"دریافت و پرداخت",v->showFinance(),"گزارش‌ها",v->showReports());
+        addMenuRow(box,"بکاپ و بازیابی",v->showBackup(),"ورود Excel",v->pickExcel());
+        TextView counts=label("کالا: "+s.productCount+"   |   مشتری: "+s.customerCount+"   |   تأمین‌کننده: "+s.supplierCount+"   |   کمبود موجودی: "+s.lowStock,13,Color.GRAY,false);counts.setGravity(Gravity.CENTER);box.addView(counts,lp(-1,-2,0,12,0,10));
     }
 
-    private void showProductsScreen() {
-        currentScreen = 0;
-        content.removeAllViews();
+    private void showProducts(){
+        screenTitle("کالا و انبار");LinearLayout actions=row();actions.addView(btn("+ تعریف کالا",v->productDialog(null)),weight());actions.addView(btn("ورود Excel",v->pickExcel()),weightM());content.addView(actions,lp(-1,-2,0,0,0,8));EditText q=searchBox("جستجوی کالا...");content.addView(q,lp(-1,dp(48),0,0,0,7));TextView stat=label("تعداد کالاها: "+db.productCount(),13,Color.GRAY,false);content.addView(stat,lp(-1,-2,0,0,0,5));ScrollView sc=new ScrollView(this);LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);sc.addView(list);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));Runnable render=()->renderProducts(list,q.getText().toString());q.addTextChangedListener(watcher(render));render.run();
+    }
+    private void renderProducts(LinearLayout list,String q){list.removeAllViews();for(AppDb.Product p:db.searchProducts(q)){LinearLayout c=card();TextView n=label(p.name+"  |  موجودی: "+p.stock+" "+p.unit,17,p.stock<=p.minStock&&p.minStock>0?Color.rgb(180,55,45):Color.rgb(30,45,70),true);c.addView(n);c.addView(label("خرید: "+money(p.purchase)+"   |   خرده: "+money(p.retail)+"   |   عمده: "+money(p.wholesale),13,Color.DKGRAY,false),lp(-1,-2,0,5,0,4));LinearLayout a=row();a.addView(btn("ویرایش",v->productDialog(p)),weight());a.addView(btn("حذف",v->confirm("حذف کالا",p.name,()->{db.deleteProduct(p.id);showProducts();})),weightM());c.addView(a);list.addView(c,lp(-1,-2,0,0,0,7));}if(list.getChildCount()==0)list.addView(empty("کالایی پیدا نشد."));}
 
-        TextView hint = label("Excel: نام کالا، قیمت خرده، قیمت عمده — ستون ۴ قیمت خرید و ستون ۵ موجودی اختیاری است.", 13, Color.DKGRAY, false);
-        content.addView(hint, lp(-1, -2, 0, 0, 0, 8));
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-
-        Button add = new Button(this);
-        add.setText("+ تعریف کالا");
-        add.setOnClickListener(v -> showProductDialog(null));
-        actions.addView(add, new LinearLayout.LayoutParams(0, dp(48), 1));
-
-        Button excel = new Button(this);
-        excel.setText("ورود / بروزرسانی Excel");
-        excel.setOnClickListener(v -> pickFile());
-        LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(0, dp(48), 1);
-        ep.setMargins(dp(6), 0, 0, 0);
-        actions.addView(excel, ep);
-        content.addView(actions, lp(-1, -2, 0, 0, 0, 8));
-
-        productSearch = searchBox("جستجوی نام کالا...");
-        productSearch.addTextChangedListener(new SimpleWatcher() {
-            public void onTextChanged(CharSequence s, int start, int before, int count) { renderProducts(s.toString()); }
-        });
-        content.addView(productSearch, lp(-1, dp(50), 0, 0, 0, 7));
-
-        productStatus = label("", 13, Color.GRAY, false);
-        content.addView(productStatus, lp(-1, -2, 0, 0, 0, 7));
-
-        ScrollView scroll = new ScrollView(this);
-        productResults = new LinearLayout(this);
-        productResults.setOrientation(LinearLayout.VERTICAL);
-        productResults.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        scroll.addView(productResults, new ScrollView.LayoutParams(-1, -2));
-        content.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-
-        updateProductStatus();
-        renderProducts("");
-        setTabState(0);
+    private void productDialog(AppDb.Product p){
+        LinearLayout f=form();EditText name=input("نام کالا",InputType.TYPE_CLASS_TEXT),unit=input("واحد (عدد، بسته، کیلو...)",InputType.TYPE_CLASS_TEXT),purchase=num("قیمت خرید"),retail=num("قیمت خرده"),wholesale=num("قیمت عمده"),stock=intNum("موجودی"),min=intNum("حداقل موجودی");if(p!=null){name.setText(p.name);unit.setText(p.unit);purchase.setText(raw(p.purchase));retail.setText(raw(p.retail));wholesale.setText(raw(p.wholesale));stock.setText(""+p.stock);min.setText(""+p.minStock);}else unit.setText("عدد");addFields(f,name,unit,purchase,retail,wholesale,stock,min);new AlertDialog.Builder(this).setTitle(p==null?"تعریف کالا":"ویرایش کالا").setView(scrollWrap(f)).setNegativeButton("انصراف",null).setPositiveButton("ذخیره",null).setOnShowListener(d->{AlertDialog a=(AlertDialog)d;a.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(name.getText().toString().trim().isEmpty()){toast("نام کالا را وارد کنید");return;}db.saveProduct(new AppDb.Product(p==null?0:p.id,name.getText().toString().trim(),val(purchase),val(retail),val(wholesale),ival(stock),unit.getText().toString().trim(),ival(min)));a.dismiss();showProducts();});}).show();
     }
 
-    private void showCustomersScreen() {
-        currentScreen = 1;
-        content.removeAllViews();
+    private void showCustomers(){screenTitle("مشتریان");content.addView(btn("+ تعریف مشتری",v->customerDialog(null)),lp(-1,dp(48),0,0,0,7));EditText q=searchBox("نام یا شماره تماس...");content.addView(q,lp(-1,dp(48),0,0,0,7));ScrollView sc=new ScrollView(this);LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);sc.addView(list);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));Runnable r=()->{list.removeAllViews();for(AppDb.Customer c:db.searchCustomers(q.getText().toString())){LinearLayout x=card();x.addView(label(c.name,17,Color.rgb(30,45,70),true));x.addView(label("تلفن: "+nz(c.phone)+"   |   مانده: "+money(db.customerBalance(c.id)),13,Color.DKGRAY,false),lp(-1,-2,0,4,0,4));LinearLayout a=row();a.addView(btn("ویرایش",v->customerDialog(c)),weight());a.addView(btn("حذف",v->confirm("حذف مشتری",c.name,()->{db.deleteCustomer(c.id);showCustomers();})),weightM());x.addView(a);list.addView(x,lp(-1,-2,0,0,0,7));}if(list.getChildCount()==0)list.addView(empty("مشتری ثبت نشده است."));};q.addTextChangedListener(watcher(r));r.run();}
+    private void customerDialog(AppDb.Customer c){LinearLayout f=form();EditText name=input("نام مشتری",1),phone=input("شماره تماس",3),address=input("آدرس",1),opening=num("مانده اول دوره (طلب از مشتری)");if(c!=null){name.setText(c.name);phone.setText(c.phone);address.setText(c.address);opening.setText(raw(c.openingBalance));}addFields(f,name,phone,address,opening);new AlertDialog.Builder(this).setTitle(c==null?"مشتری جدید":"ویرایش مشتری").setView(scrollWrap(f)).setNegativeButton("انصراف",null).setPositiveButton("ذخیره",null).setOnShowListener(d->{AlertDialog a=(AlertDialog)d;a.getButton(-1).setOnClickListener(v->{if(name.getText().toString().trim().isEmpty()){toast("نام را وارد کنید");return;}db.saveCustomer(new AppDb.Customer(c==null?0:c.id,name.getText().toString().trim(),phone.getText().toString(),address.getText().toString(),val(opening)));a.dismiss();showCustomers();});}).show();}
 
-        Button add = new Button(this);
-        add.setText("+ تعریف مشتری جدید");
-        add.setOnClickListener(v -> showCustomerDialog(null));
-        content.addView(add, lp(-1, dp(48), 0, 0, 0, 8));
+    private void showSuppliers(){screenTitle("تأمین‌کنندگان");content.addView(btn("+ تعریف تأمین‌کننده",v->supplierDialog(null)),lp(-1,dp(48),0,0,0,7));EditText q=searchBox("نام یا شماره تماس...");content.addView(q,lp(-1,dp(48),0,0,0,7));ScrollView sc=new ScrollView(this);LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);sc.addView(list);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));Runnable r=()->{list.removeAllViews();for(AppDb.Supplier s:db.searchSuppliers(q.getText().toString())){LinearLayout x=card();x.addView(label(s.name,17,Color.rgb(30,45,70),true));x.addView(label("تلفن: "+nz(s.phone)+"   |   بدهی: "+money(db.supplierBalance(s.id)),13,Color.DKGRAY,false),lp(-1,-2,0,4,0,4));LinearLayout a=row();a.addView(btn("ویرایش",v->supplierDialog(s)),weight());a.addView(btn("حذف",v->confirm("حذف تأمین‌کننده",s.name,()->{db.deleteSupplier(s.id);showSuppliers();})),weightM());x.addView(a);list.addView(x,lp(-1,-2,0,0,0,7));}if(list.getChildCount()==0)list.addView(empty("تأمین‌کننده ثبت نشده است."));};q.addTextChangedListener(watcher(r));r.run();}
+    private void supplierDialog(AppDb.Supplier s){LinearLayout f=form();EditText name=input("نام تأمین‌کننده",1),phone=input("شماره تماس",3),address=input("آدرس",1),opening=num("مانده اول دوره (بدهی به تأمین‌کننده)");if(s!=null){name.setText(s.name);phone.setText(s.phone);address.setText(s.address);opening.setText(raw(s.openingBalance));}addFields(f,name,phone,address,opening);new AlertDialog.Builder(this).setTitle(s==null?"تأمین‌کننده جدید":"ویرایش تأمین‌کننده").setView(scrollWrap(f)).setNegativeButton("انصراف",null).setPositiveButton("ذخیره",null).setOnShowListener(d->{AlertDialog a=(AlertDialog)d;a.getButton(-1).setOnClickListener(v->{if(name.getText().toString().trim().isEmpty()){toast("نام را وارد کنید");return;}db.saveSupplier(new AppDb.Supplier(s==null?0:s.id,name.getText().toString().trim(),phone.getText().toString(),address.getText().toString(),val(opening)));a.dismiss();showSuppliers();});}).show();}
 
-        customerSearch = searchBox("جستجو با نام یا شماره تماس...");
-        customerSearch.addTextChangedListener(new SimpleWatcher() {
-            public void onTextChanged(CharSequence s, int start, int before, int count) { renderCustomers(s.toString()); }
-        });
-        content.addView(customerSearch, lp(-1, dp(50), 0, 0, 0, 7));
+    private void showVisitors(){screenTitle("ویزیتورها");content.addView(btn("+ تعریف ویزیتور",v->visitorDialog(null)),lp(-1,dp(48),0,0,0,7));EditText q=searchBox("نام یا شماره تماس...");content.addView(q,lp(-1,dp(48),0,0,0,7));ScrollView sc=new ScrollView(this);LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);sc.addView(list);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));Runnable r=()->{list.removeAllViews();for(AppDb.Visitor s:db.searchVisitors(q.getText().toString())){LinearLayout x=card();x.addView(label(s.name+(s.active?"":" (غیرفعال)"),17,s.active?Color.rgb(30,45,70):Color.GRAY,true));x.addView(label("تلفن: "+nz(s.phone)+"   |   پورسانت: "+raw(s.commissionPercent)+"٪",13,Color.DKGRAY,false),lp(-1,-2,0,4,0,4));LinearLayout a=row();a.addView(btn("ویرایش",v->visitorDialog(s)),weight());a.addView(btn("حذف",v->confirm("حذف ویزیتور",s.name,()->{db.deleteVisitor(s.id);showVisitors();})),weightM());x.addView(a);list.addView(x,lp(-1,-2,0,0,0,7));}if(list.getChildCount()==0)list.addView(empty("ویزیتور ثبت نشده است."));};q.addTextChangedListener(watcher(r));r.run();}
+    private void visitorDialog(AppDb.Visitor s){LinearLayout f=form();EditText name=input("نام ویزیتور",1),phone=input("شماره تماس",3),commission=num("درصد پورسانت"),notes=input("توضیحات",1);Button active=btn(s==null||s.active?"وضعیت: فعال":"وضعیت: غیرفعال",null);final boolean[] on={s==null||s.active};active.setOnClickListener(v->{on[0]=!on[0];active.setText(on[0]?"وضعیت: فعال":"وضعیت: غیرفعال");});if(s!=null){name.setText(s.name);phone.setText(s.phone);commission.setText(raw(s.commissionPercent));notes.setText(s.notes);}addFields(f,name,phone,commission,notes);f.addView(active,lp(-1,dp(45),0,4,0,4));new AlertDialog.Builder(this).setTitle(s==null?"ویزیتور جدید":"ویرایش ویزیتور").setView(scrollWrap(f)).setNegativeButton("انصراف",null).setPositiveButton("ذخیره",null).setOnShowListener(d->{AlertDialog a=(AlertDialog)d;a.getButton(-1).setOnClickListener(v->{if(name.getText().toString().trim().isEmpty()){toast("نام را وارد کنید");return;}db.saveVisitor(new AppDb.Visitor(s==null?0:s.id,name.getText().toString().trim(),phone.getText().toString(),val(commission),notes.getText().toString(),on[0]));a.dismiss();showVisitors();});}).show();}
 
-        customerStatus = label("", 13, Color.GRAY, false);
-        content.addView(customerStatus, lp(-1, -2, 0, 0, 0, 7));
-
-        ScrollView scroll = new ScrollView(this);
-        customerResults = new LinearLayout(this);
-        customerResults.setOrientation(LinearLayout.VERTICAL);
-        customerResults.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        scroll.addView(customerResults, new ScrollView.LayoutParams(-1, -2));
-        content.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-
-        updateCustomerStatus();
-        renderCustomers("");
-        setTabState(1);
+    private void showSale(){
+        screenTitle("فاکتور فروش — "+saleNo);saleCustomerText=label(saleCustomer==null?"مشتری: انتخاب نشده":"مشتری: "+saleCustomer.name,14,Color.DKGRAY,true);saleVisitorText=label(saleVisitor==null?"ویزیتور: انتخاب نشده":"ویزیتور: "+saleVisitor.name+" ("+raw(saleVisitor.commissionPercent)+"٪)",14,Color.DKGRAY,true);content.addView(saleCustomerText,lp(-1,-2,0,0,0,4));content.addView(btn("انتخاب مشتری",v->pickCustomer(c->{saleCustomer=c;showSale();})),lp(-1,dp(44),0,0,0,5));content.addView(saleVisitorText,lp(-1,-2,0,0,0,4));content.addView(btn("انتخاب ویزیتور",v->pickVisitor(x->{saleVisitor=x;showSale();})),lp(-1,dp(44),0,0,0,6));
+        content.addView(btn("+ افزودن کالا به فاکتور",v->pickProduct(p->lineDialog(p,true))),lp(-1,dp(46),0,0,0,6));ScrollView sc=new ScrollView(this);saleItems=new LinearLayout(this);saleItems.setOrientation(LinearLayout.VERTICAL);sc.addView(saleItems);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout amounts=row();saleDiscount=num("تخفیف");salePaid=num("دریافتی");saleDiscount.setText("0");salePaid.setText("0");amounts.addView(saleDiscount,weight());amounts.addView(salePaid,weightM());content.addView(amounts,lp(-1,dp(50),0,5,0,5));saleAccount=input("حساب دریافت (نقد / بانک)",1);saleAccount.setText("نقد");content.addView(saleAccount,lp(-1,dp(48),0,0,0,5));saleTotal=label("",18,Color.rgb(35,105,70),true);content.addView(saleTotal,lp(-1,-2,0,0,0,5));Runnable upd=this::renderSaleLines;saleDiscount.addTextChangedListener(watcher(upd));LinearLayout a=row();a.addView(btn("ثبت فروش",v->saveSale(false)),weight());a.addView(btn("ثبت و PDF",v->saveSale(true)),weightM());content.addView(a,lp(-1,dp(50),0,0,0,0));renderSaleLines();
     }
+    private void renderSaleLines(){if(saleItems==null)return;saleItems.removeAllViews();for(int i=0;i<saleLines.size();i++){final int idx=i;AppDb.SaleLine l=saleLines.get(i);LinearLayout c=card();c.addView(label(l.productName,15,Color.rgb(30,45,70),true));c.addView(label("تعداد: "+l.qty+"   |   فی: "+money(l.unitPrice)+"   |   جمع: "+money(l.qty*l.unitPrice),13,Color.DKGRAY,false));c.addView(btn("حذف",v->{saleLines.remove(idx);renderSaleLines();}),lp(-1,dp(40),0,4,0,0));saleItems.addView(c,lp(-1,-2,0,0,0,5));}double sub=total(saleLines),dis=saleDiscount==null?0:val(saleDiscount);if(saleTotal!=null)saleTotal.setText("جمع فاکتور: "+money(Math.max(0,sub-dis)));if(saleItems.getChildCount()==0)saleItems.addView(empty("هنوز کالایی اضافه نشده است."));}
+    private void saveSale(boolean pdf){try{if(saleLines.isEmpty()){toast("فاکتور خالی است");return;}ArrayList<AppDb.SaleLine> snapshot=copyLines(saleLines);String no=saleNo;AppDb.Customer cust=saleCustomer;long now=System.currentTimeMillis();db.saveSale(no,saleCustomer,saleVisitor,saleLines,val(saleDiscount),val(salePaid),saleAccount.getText().toString());toast("فروش ثبت شد و موجودی کسر شد");if(pdf){pendingPdfLines=snapshot;pendingPdfCustomer=cust;pendingPdfNo=no;pendingPdfTime=now;Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/pdf");i.putExtra(Intent.EXTRA_TITLE,"invoice_"+no+".pdf");startActivityForResult(i,SAVE_PDF);}saleLines.clear();saleCustomer=null;saleVisitor=null;saleNo=newNo("F");showDashboard();}catch(Exception e){toast(e.getMessage());}}
 
-    private void showInvoiceScreen() {
-        currentScreen = 2;
-        content.removeAllViews();
-
-        invoiceNoText = label("شماره فاکتور: " + currentInvoiceNo, 13, Color.GRAY, false);
-        content.addView(invoiceNoText, lp(-1, -2, 0, 0, 0, 5));
-
-        selectedCustomerText = label(customerText(), 15, Color.rgb(20, 36, 64), true);
-        content.addView(selectedCustomerText, lp(-1, -2, 0, 0, 0, 5));
-
-        Button chooseCustomer = new Button(this);
-        chooseCustomer.setText("انتخاب مشتری از لیست");
-        chooseCustomer.setOnClickListener(v -> showCustomerPicker());
-        content.addView(chooseCustomer, lp(-1, dp(46), 0, 0, 0, 7));
-
-        ScrollView scroll = new ScrollView(this);
-        invoiceItemsContainer = new LinearLayout(this);
-        invoiceItemsContainer.setOrientation(LinearLayout.VERTICAL);
-        invoiceItemsContainer.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        scroll.addView(invoiceItemsContainer, new ScrollView.LayoutParams(-1, -2));
-        content.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-
-        invoiceTotal = label("", 20, Color.rgb(20, 92, 65), true);
-        content.addView(invoiceTotal, lp(-1, -2, 0, 7, 0, 5));
-
-        Button save = new Button(this);
-        save.setText("ثبت فروش و کسر از موجودی");
-        save.setOnClickListener(v -> saveSale());
-        content.addView(save, lp(-1, dp(50), 0, 0, 0, 5));
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-
-        Button pdf = new Button(this);
-        pdf.setText("صدور PDF");
-        pdf.setOnClickListener(v -> requestSavePdf());
-        row.addView(pdf, new LinearLayout.LayoutParams(0, dp(48), 1));
-
-        Button clear = new Button(this);
-        clear.setText("فاکتور جدید / پاک کردن");
-        clear.setOnClickListener(v -> clearInvoice());
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, dp(48), 1);
-        clp.setMargins(dp(6), 0, 0, 0);
-        row.addView(clear, clp);
-        content.addView(row, lp(-1, -2, 0, 0, 0, 0));
-
-        renderInvoice();
-        setTabState(2);
+    private void showPurchase(){
+        screenTitle("فاکتور خرید — "+purchaseNo);purchaseSupplierText=label(purchaseSupplier==null?"تأمین‌کننده: انتخاب نشده":"تأمین‌کننده: "+purchaseSupplier.name,14,Color.DKGRAY,true);content.addView(purchaseSupplierText,lp(-1,-2,0,0,0,4));content.addView(btn("انتخاب تأمین‌کننده",v->pickSupplier(s->{purchaseSupplier=s;showPurchase();})),lp(-1,dp(44),0,0,0,6));content.addView(btn("+ افزودن کالا به خرید",v->pickProduct(p->lineDialog(p,false))),lp(-1,dp(46),0,0,0,6));ScrollView sc=new ScrollView(this);purchaseItems=new LinearLayout(this);purchaseItems.setOrientation(LinearLayout.VERTICAL);sc.addView(purchaseItems);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));LinearLayout amounts=row();purchaseDiscount=num("تخفیف");purchasePaid=num("پرداختی");purchaseDiscount.setText("0");purchasePaid.setText("0");amounts.addView(purchaseDiscount,weight());amounts.addView(purchasePaid,weightM());content.addView(amounts,lp(-1,dp(50),0,5,0,5));purchaseAccount=input("حساب پرداخت (نقد / بانک)",1);purchaseAccount.setText("نقد");content.addView(purchaseAccount,lp(-1,dp(48),0,0,0,5));purchaseTotal=label("",18,Color.rgb(35,105,70),true);content.addView(purchaseTotal,lp(-1,-2,0,0,0,5));purchaseDiscount.addTextChangedListener(watcher(this::renderPurchaseLines));content.addView(btn("ثبت خرید و افزایش موجودی",v->savePurchase()),lp(-1,dp(50),0,0,0,0));renderPurchaseLines();
     }
+    private void renderPurchaseLines(){if(purchaseItems==null)return;purchaseItems.removeAllViews();for(int i=0;i<purchaseLines.size();i++){final int idx=i;AppDb.SaleLine l=purchaseLines.get(i);LinearLayout c=card();c.addView(label(l.productName,15,Color.rgb(30,45,70),true));c.addView(label("تعداد: "+l.qty+"   |   قیمت خرید: "+money(l.unitPrice)+"   |   جمع: "+money(l.qty*l.unitPrice),13,Color.DKGRAY,false));c.addView(btn("حذف",v->{purchaseLines.remove(idx);renderPurchaseLines();}),lp(-1,dp(40),0,4,0,0));purchaseItems.addView(c,lp(-1,-2,0,0,0,5));}double sub=total(purchaseLines),dis=purchaseDiscount==null?0:val(purchaseDiscount);if(purchaseTotal!=null)purchaseTotal.setText("جمع خرید: "+money(Math.max(0,sub-dis)));if(purchaseItems.getChildCount()==0)purchaseItems.addView(empty("هنوز کالایی اضافه نشده است."));}
+    private void savePurchase(){try{if(purchaseLines.isEmpty()){toast("فاکتور خالی است");return;}db.savePurchase(purchaseNo,purchaseSupplier,purchaseLines,val(purchaseDiscount),val(purchasePaid),purchaseAccount.getText().toString());toast("خرید ثبت شد و موجودی افزایش یافت");purchaseLines.clear();purchaseSupplier=null;purchaseNo=newNo("K");showDashboard();}catch(Exception e){toast(e.getMessage());}}
 
-    private void setTabState(int active) {
-        productsTab.setEnabled(active != 0);
-        customersTab.setEnabled(active != 1);
-        invoiceTab.setEnabled(active != 2);
-    }
+    private void lineDialog(AppDb.Product p,boolean sale){LinearLayout f=form();EditText qty=intNum("تعداد"),price=num("قیمت واحد");qty.setText("1");price.setText(raw(sale?p.retail:p.purchase));f.addView(label(p.name+" — موجودی: "+p.stock,15,Color.DKGRAY,true));addFields(f,qty,price);if(sale){LinearLayout pr=row();pr.addView(btn("قیمت خرده",v->price.setText(raw(p.retail))),weight());pr.addView(btn("قیمت عمده",v->price.setText(raw(p.wholesale))),weightM());f.addView(pr,lp(-1,dp(43),0,3,0,3));}new AlertDialog.Builder(this).setTitle(sale?"افزودن به فروش":"افزودن به خرید").setView(f).setNegativeButton("انصراف",null).setPositiveButton("افزودن",(d,w)->{int q=Math.max(1,ival(qty));double pr=Math.max(0,val(price));if(sale)saleLines.add(new AppDb.SaleLine(p.id,p.name,pr,q,"فروش"));else purchaseLines.add(new AppDb.SaleLine(p.id,p.name,pr,q,"خرید"));if(sale)showSale();else showPurchase();}).show();}
 
-    private void updateInvoiceTab() {
-        if (invoiceTab == null) return;
-        int count = 0;
-        for (AppDb.SaleLine i : invoiceItems) count += i.qty;
-        invoiceTab.setText(count == 0 ? "فاکتور" : "فاکتور (" + count + ")");
-    }
+    private void showFinance(){screenTitle("دریافت، پرداخت، هزینه و درآمد");AppDb.Summary s=db.summary();content.addView(metric("مانده حساب‌های نقد و بانک",money(s.cash)),lp(-1,-2,0,0,0,8));addMenuRow(content,"دریافت از مشتری",v->pickCustomer(c->financeDialog("RECEIPT","CUSTOMER",c.id,c.name)),"پرداخت به تأمین‌کننده",v->pickSupplier(x->financeDialog("PAYMENT","SUPPLIER",x.id,x.name)));addMenuRow(content,"ثبت درآمد",v->financeDialog("INCOME","",0,""),"ثبت هزینه",v->financeDialog("EXPENSE","",0,""));content.addView(label("آخرین گردش‌ها",16,Color.DKGRAY,true),lp(-1,-2,0,10,0,5));ScrollView sc=new ScrollView(this);LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);for(AppDb.FinanceEntry e:db.recentFinance()){LinearLayout c=card();String typeFa=e.type.equals("RECEIPT")?"دریافت":e.type.equals("PAYMENT")?"پرداخت":e.type.equals("INCOME")?"درآمد":"هزینه";c.addView(label(typeFa+" — "+money(e.amount),15,e.type.equals("RECEIPT")||e.type.equals("INCOME")?Color.rgb(30,120,75):Color.rgb(180,70,50),true));c.addView(label((e.partyName==null||e.partyName.isEmpty()?"":e.partyName+" | ")+e.account+" | "+date(e.createdAt),12,Color.GRAY,false));if(e.description!=null&&!e.description.isEmpty())c.addView(label(e.description,12,Color.DKGRAY,false));list.addView(c,lp(-1,-2,0,0,0,5));}sc.addView(list);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));}
+    private void financeDialog(String type,String kind,long partyId,String partyName){LinearLayout f=form();EditText amount=num("مبلغ"),account=input("حساب (نقد / بانک / کارت)",1),desc=input("شرح",1);account.setText("نقد");addFields(f,amount,account,desc);new AlertDialog.Builder(this).setTitle(typeFa(type)+(partyName.isEmpty()?"":" — "+partyName)).setView(f).setNegativeButton("انصراف",null).setPositiveButton("ثبت",null).setOnShowListener(d->{AlertDialog a=(AlertDialog)d;a.getButton(-1).setOnClickListener(v->{if(val(amount)<=0){toast("مبلغ را وارد کنید");return;}db.addFinance(type,account.getText().toString(),kind,partyId,partyName,val(amount),desc.getText().toString());a.dismiss();showFinance();});}).show();}
 
-    private void updateProductStatus() {
-        if (productStatus != null) productStatus.setText("تعداد کالاها: " + number(db.productCount()));
-    }
+    private void showReports(){screenTitle("گزارش‌های مدیریتی");ScrollView sc=new ScrollView(this);LinearLayout b=new LinearLayout(this);b.setOrientation(LinearLayout.VERTICAL);AppDb.Summary s=db.summary();b.addView(metric("فروش کل",money(s.sales)),lp(-1,-2,0,0,0,5));b.addView(metric("خرید کل",money(s.purchases)),lp(-1,-2,0,0,0,5));b.addView(metric("سود ناخالص تقریبی موجودی فروش‌رفته",money(Math.max(0,s.sales-s.purchases)),lp(-1,-2,0,0,0,5));b.addView(metric("مطالبات از مشتریان",money(s.receivables)),lp(-1,-2,0,0,0,5));b.addView(metric("بدهی به تأمین‌کنندگان",money(s.payables)),lp(-1,-2,0,0,0,5));b.addView(metric("ارزش موجودی با قیمت خرید",money(s.stockValue)),lp(-1,-2,0,0,0,5));b.addView(metric("کالاهای رسیده به حداقل موجودی",String.valueOf(s.lowStock)),lp(-1,-2,0,0,0,10));b.addView(label("عملکرد ویزیتورها",17,Color.DKGRAY,true),lp(-1,-2,0,0,0,5));for(AppDb.VisitorReport r:db.visitorReports()){LinearLayout c=card();c.addView(label(r.name,15,Color.rgb(30,45,70),true));c.addView(label("فروش منتسب: "+money(r.sales)+"   |   پورسانت: "+money(r.commission),13,Color.DKGRAY,false));b.addView(c,lp(-1,-2,0,0,0,5));}b.addView(label("کمبود موجودی",17,Color.DKGRAY,true),lp(-1,-2,0,10,0,5));for(AppDb.Product p:db.searchProducts("")){if(p.minStock>0&&p.stock<=p.minStock)b.addView(label("• "+p.name+" — موجودی "+p.stock+" / حداقل "+p.minStock,13,Color.rgb(180,55,45),false),lp(-1,-2,0,2,0,2));}sc.addView(b);content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));}
 
-    private void updateCustomerStatus() {
-        if (customerStatus != null) customerStatus.setText("تعداد مشتریان: " + number(db.customerCount()));
-    }
+    private void showBackup(){screenTitle("بکاپ و بازیابی");content.addView(label("بکاپ شامل کالاها، موجودی، مشتریان، تأمین‌کنندگان، ویزیتورها، فاکتورهای خرید و فروش و گردش مالی است.",14,Color.DKGRAY,false),lp(-1,-2,0,0,0,10));content.addView(btn("ایجاد فایل بکاپ کامل",v->createBackup()),lp(-1,dp(52),0,0,0,8));content.addView(btn("بازیابی از فایل بکاپ",v->chooseRestore()),lp(-1,dp(52),0,0,0,8));TextView w=label("توجه: بازیابی، اطلاعات فعلی برنامه را با اطلاعات فایل بکاپ جایگزین می‌کند.",13,Color.rgb(170,65,45),true);content.addView(w,lp(-1,-2,0,8,0,0));}
 
-    private void renderProducts(String q) {
-        if (productResults == null) return;
-        productResults.removeAllViews();
-        List<AppDb.Product> list = db.searchProducts(q);
-        if (list.isEmpty()) {
-            TextView empty = label(db.productCount() == 0 ? "هنوز کالایی تعریف نشده است." : "کالایی پیدا نشد.", 16, Color.GRAY, false);
-            empty.setGravity(Gravity.CENTER);
-            empty.setPadding(0, dp(28), 0, 0);
-            productResults.addView(empty);
-            return;
-        }
-        for (AppDb.Product p : list) productResults.addView(productCard(p));
-    }
+    private void createBackup(){Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/octet-stream");i.putExtra(Intent.EXTRA_TITLE,"setayesh_backup_"+new SimpleDateFormat("yyyyMMdd_HHmm",Locale.US).format(new Date())+".setayeshbak");startActivityForResult(i,BACKUP_CREATE);}
+    private void chooseRestore(){new AlertDialog.Builder(this).setTitle("بازیابی بکاپ").setMessage("اطلاعات فعلی جایگزین خواهد شد. ادامه می‌دهید؟").setNegativeButton("خیر",null).setPositiveButton("انتخاب فایل",(d,w)->{Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("*/*");startActivityForResult(i,BACKUP_RESTORE);}).show();}
 
-    private View productCard(AppDb.Product p) {
-        LinearLayout card = card();
+    private void pickExcel(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");startActivityForResult(i,PICK_XLSX);}
+    @Override protected void onActivityResult(int req,int res,Intent data){super.onActivityResult(req,res,data);if(res!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();if(req==PICK_XLSX)new Thread(()->importExcel(uri)).start();else if(req==SAVE_PDF)new Thread(()->writePdf(uri)).start();else if(req==BACKUP_CREATE)new Thread(()->writeBackup(uri)).start();else if(req==BACKUP_RESTORE)new Thread(()->restoreBackup(uri)).start();}
+    private void importExcel(Uri uri){try{File tmp=new File(getCacheDir(),"import.xlsx");copy(getContentResolver().openInputStream(uri),new FileOutputStream(tmp));List<AppDb.Product> list=XlsxReader.read(tmp);db.upsertProducts(list);tmp.delete();runOnUiThread(()->{toast(list.size()+" کالا بروزرسانی/اضافه شد");showProducts();});}catch(Exception e){runOnUiThread(()->toast("خطا در Excel: "+e.getMessage()));}}
+    private void writePdf(Uri uri){try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new Exception("فایل باز نشد");InvoicePdf.write(out,pendingPdfNo,pendingPdfCustomer,pendingPdfLines,pendingPdfTime);runOnUiThread(()->toast("PDF فاکتور ذخیره شد"));}catch(Exception e){runOnUiThread(()->toast("خطای PDF: "+e.getMessage()));}}
+    private void writeBackup(Uri uri){try{db.checkpoint();db.close();File src=getDatabasePath(AppDb.DB_NAME);try(InputStream in=new FileInputStream(src);OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new Exception("فایل مقصد باز نشد");copy(in,out);}db=new AppDb(this);runOnUiThread(()->toast("بکاپ کامل ذخیره شد"));}catch(Exception e){db=new AppDb(this);runOnUiThread(()->toast("خطای بکاپ: "+e.getMessage()));}}
+    private void restoreBackup(Uri uri){try{File tmp=new File(getCacheDir(),"restore.db");copy(getContentResolver().openInputStream(uri),new FileOutputStream(tmp));SQLiteDatabase test=SQLiteDatabase.openDatabase(tmp.getAbsolutePath(),null,SQLiteDatabase.OPEN_READONLY);test.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='products'",null).close();test.close();db.close();File dst=getDatabasePath(AppDb.DB_NAME);File wal=new File(dst.getAbsolutePath()+"-wal"),shm=new File(dst.getAbsolutePath()+"-shm");if(wal.exists())wal.delete();if(shm.exists())shm.delete();copy(new FileInputStream(tmp),new FileOutputStream(dst));tmp.delete();db=new AppDb(this);db.getWritableDatabase();runOnUiThread(()->{toast("بکاپ با موفقیت بازیابی شد");showDashboard();});}catch(Exception e){db=new AppDb(this);runOnUiThread(()->toast("فایل بکاپ معتبر نیست: "+e.getMessage()));}}
 
-        TextView name = label(p.name, 18, Color.rgb(20, 36, 64), true);
-        card.addView(name);
+    private void pickCustomer(CustomerPick cb){List<AppDb.Customer> list=db.searchCustomers("");if(list.isEmpty()){toast("ابتدا مشتری تعریف کنید");return;}String[] names=new String[list.size()];for(int i=0;i<list.size();i++)names[i]=list.get(i).name+" — "+list.get(i).phone;new AlertDialog.Builder(this).setTitle("انتخاب مشتری").setItems(names,(d,w)->cb.picked(list.get(w))).setNegativeButton("انصراف",null).show();}
+    private void pickSupplier(SupplierPick cb){List<AppDb.Supplier> list=db.searchSuppliers("");if(list.isEmpty()){toast("ابتدا تأمین‌کننده تعریف کنید");return;}String[] names=new String[list.size()];for(int i=0;i<list.size();i++)names[i]=list.get(i).name+" — "+list.get(i).phone;new AlertDialog.Builder(this).setTitle("انتخاب تأمین‌کننده").setItems(names,(d,w)->cb.picked(list.get(w))).setNegativeButton("انصراف",null).show();}
+    private void pickVisitor(VisitorPick cb){List<AppDb.Visitor> all=db.searchVisitors("");ArrayList<AppDb.Visitor> list=new ArrayList<>();for(AppDb.Visitor v:all)if(v.active)list.add(v);if(list.isEmpty()){toast("ویزیتور فعالی تعریف نشده است");return;}String[] names=new String[list.size()];for(int i=0;i<list.size();i++)names[i]=list.get(i).name+" — "+raw(list.get(i).commissionPercent)+"٪";new AlertDialog.Builder(this).setTitle("انتخاب ویزیتور").setItems(names,(d,w)->cb.picked(list.get(w))).setNeutralButton("بدون ویزیتور",(d,w)->cb.picked(null)).show();}
+    private void pickProduct(ProductPick cb){LinearLayout f=form();EditText q=searchBox("جستجوی کالا...");LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);f.addView(q,lp(-1,dp(48),0,0,0,5));ScrollView sc=new ScrollView(this);sc.addView(list);f.addView(sc,new LinearLayout.LayoutParams(-1,dp(420)));AlertDialog dlg=new AlertDialog.Builder(this).setTitle("انتخاب کالا").setView(f).setNegativeButton("انصراف",null).create();Runnable r=()->{list.removeAllViews();for(AppDb.Product p:db.searchProducts(q.getText().toString())){Button b=btn(p.name+" — موجودی "+p.stock,v->{dlg.dismiss();cb.picked(p);});list.addView(b,lp(-1,dp(46),0,0,0,4));}};q.addTextChangedListener(watcher(r));dlg.setOnShowListener(x->r.run());dlg.show();}
 
-        card.addView(label("قیمت خرید: " + money(p.purchase), 14, Color.rgb(105, 85, 20), false), lp(-1, -2, 0, 6, 0, 0));
-        card.addView(label("قیمت خرده: " + money(p.retail), 15, Color.rgb(25, 110, 75), false), lp(-1, -2, 0, 3, 0, 0));
-        card.addView(label("قیمت عمده: " + money(p.wholesale), 15, Color.rgb(35, 80, 150), false), lp(-1, -2, 0, 3, 0, 0));
-        int stockColor = p.stock <= 0 ? Color.rgb(180, 45, 45) : Color.rgb(80, 80, 80);
-        card.addView(label("موجودی انبار: " + number(p.stock), 15, stockColor, true), lp(-1, -2, 0, 3, 0, 7));
-
-        LinearLayout row1 = new LinearLayout(this);
-        row1.setOrientation(LinearLayout.HORIZONTAL);
-        row1.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-
-        Button retail = smallButton("فروش خرده");
-        retail.setEnabled(p.stock > reservedQty(p.id));
-        retail.setOnClickListener(v -> addToInvoice(p, p.retail, "خرده"));
-        row1.addView(retail, new LinearLayout.LayoutParams(0, dp(43), 1));
-
-        Button wholesale = smallButton("فروش عمده");
-        wholesale.setEnabled(p.stock > reservedQty(p.id));
-        wholesale.setOnClickListener(v -> addToInvoice(p, p.wholesale, "عمده"));
-        LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(0, dp(43), 1);
-        wp.setMargins(dp(5), 0, 0, 0);
-        row1.addView(wholesale, wp);
-        card.addView(row1);
-
-        Button edit = smallButton("ویرایش کالا / موجودی");
-        edit.setOnClickListener(v -> showProductDialog(p));
-        card.addView(edit, lp(-1, dp(43), 0, 5, 0, 0));
-        return card;
-    }
-
-    private void showProductDialog(AppDb.Product existing) {
-        boolean edit = existing != null;
-        LinearLayout form = formLayout();
-        EditText name = field("نام کالا", edit ? existing.name : "", InputType.TYPE_CLASS_TEXT);
-        EditText purchase = field("قیمت خرید", edit ? plain(existing.purchase) : "", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        EditText retail = field("قیمت خرده", edit ? plain(existing.retail) : "", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        EditText wholesale = field("قیمت عمده", edit ? plain(existing.wholesale) : "", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        EditText stock = field("موجودی انبار", edit ? String.valueOf(existing.stock) : "0", InputType.TYPE_CLASS_NUMBER);
-        form.addView(name); form.addView(purchase); form.addView(retail); form.addView(wholesale); form.addView(stock);
-
-        ScrollView sv = new ScrollView(this);
-        sv.addView(form);
-        AlertDialog.Builder b = new AlertDialog.Builder(this)
-                .setTitle(edit ? "ویرایش کالا" : "تعریف کالا")
-                .setView(sv)
-                .setNegativeButton("انصراف", null)
-                .setPositiveButton("ذخیره", (d, w) -> {
-                    String n = name.getText().toString().trim();
-                    if (n.isEmpty()) { toast("نام کالا را وارد کنید"); return; }
-                    AppDb.Product p = new AppDb.Product(edit ? existing.id : 0, n, val(purchase), val(retail), val(wholesale), intVal(stock));
-                    db.saveProduct(p);
-                    toast(edit ? "کالا بروزرسانی شد" : "کالا ثبت شد");
-                    if (currentScreen == 0) {
-                        updateProductStatus();
-                        renderProducts(productSearch == null ? "" : productSearch.getText().toString());
-                    }
-                });
-        if (edit) {
-            b.setNeutralButton("حذف کالا", (d, w) -> new AlertDialog.Builder(this)
-                    .setMessage("این کالا حذف شود؟")
-                    .setNegativeButton("خیر", null)
-                    .setPositiveButton("حذف", (x, y) -> {
-                        db.deleteProduct(existing.id);
-                        for (int i = invoiceItems.size() - 1; i >= 0; i--) if (invoiceItems.get(i).productId == existing.id) invoiceItems.remove(i);
-                        updateInvoiceTab();
-                        updateProductStatus();
-                        renderProducts(productSearch == null ? "" : productSearch.getText().toString());
-                    }).show());
-        }
-        b.show();
-    }
-
-    private void renderCustomers(String q) {
-        if (customerResults == null) return;
-        customerResults.removeAllViews();
-        List<AppDb.Customer> list = db.searchCustomers(q);
-        if (list.isEmpty()) {
-            TextView empty = label(db.customerCount() == 0 ? "هنوز مشتری تعریف نشده است." : "مشتری پیدا نشد.", 16, Color.GRAY, false);
-            empty.setGravity(Gravity.CENTER);
-            empty.setPadding(0, dp(28), 0, 0);
-            customerResults.addView(empty);
-            return;
-        }
-        for (AppDb.Customer c : list) customerResults.addView(customerCard(c));
-    }
-
-    private View customerCard(AppDb.Customer c) {
-        LinearLayout card = card();
-        card.addView(label(c.name, 18, Color.rgb(20, 36, 64), true));
-        if (c.phone != null && !c.phone.isEmpty()) card.addView(label("تلفن: " + c.phone, 14, Color.DKGRAY, false), lp(-1, -2, 0, 5, 0, 0));
-        if (c.address != null && !c.address.isEmpty()) card.addView(label("آدرس: " + c.address, 14, Color.DKGRAY, false), lp(-1, -2, 0, 3, 0, 5));
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        Button select = smallButton("انتخاب برای فاکتور");
-        select.setOnClickListener(v -> {
-            selectedCustomer = c;
-            toast("مشتری برای فاکتور انتخاب شد");
-            showInvoiceScreen();
-        });
-        row.addView(select, new LinearLayout.LayoutParams(0, dp(43), 1));
-        Button edit = smallButton("ویرایش");
-        edit.setOnClickListener(v -> showCustomerDialog(c));
-        LinearLayout.LayoutParams e = new LinearLayout.LayoutParams(0, dp(43), 1);
-        e.setMargins(dp(5), 0, 0, 0);
-        row.addView(edit, e);
-        card.addView(row);
-        return card;
-    }
-
-    private void showCustomerDialog(AppDb.Customer existing) {
-        boolean edit = existing != null;
-        LinearLayout form = formLayout();
-        EditText name = field("نام مشتری", edit ? existing.name : "", InputType.TYPE_CLASS_TEXT);
-        EditText phone = field("شماره تماس", edit ? existing.phone : "", InputType.TYPE_CLASS_PHONE);
-        EditText address = field("آدرس", edit ? existing.address : "", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        address.setSingleLine(false);
-        address.setMinLines(2);
-        form.addView(name); form.addView(phone); form.addView(address);
-        ScrollView sv = new ScrollView(this); sv.addView(form);
-
-        AlertDialog.Builder b = new AlertDialog.Builder(this)
-                .setTitle(edit ? "ویرایش مشتری" : "تعریف مشتری")
-                .setView(sv)
-                .setNegativeButton("انصراف", null)
-                .setPositiveButton("ذخیره", (d, w) -> {
-                    String n = name.getText().toString().trim();
-                    if (n.isEmpty()) { toast("نام مشتری را وارد کنید"); return; }
-                    AppDb.Customer c = new AppDb.Customer(edit ? existing.id : 0, n, phone.getText().toString().trim(), address.getText().toString().trim());
-                    long id = db.saveCustomer(c);
-                    if (!edit) c.id = id;
-                    toast(edit ? "مشتری بروزرسانی شد" : "مشتری ثبت شد");
-                    if (selectedCustomer != null && edit && selectedCustomer.id == existing.id) selectedCustomer = c;
-                    if (currentScreen == 1) {
-                        updateCustomerStatus();
-                        renderCustomers(customerSearch == null ? "" : customerSearch.getText().toString());
-                    }
-                });
-        if (edit) {
-            b.setNeutralButton("حذف مشتری", (d, w) -> new AlertDialog.Builder(this)
-                    .setMessage("این مشتری حذف شود؟")
-                    .setNegativeButton("خیر", null)
-                    .setPositiveButton("حذف", (x, y) -> {
-                        db.deleteCustomer(existing.id);
-                        if (selectedCustomer != null && selectedCustomer.id == existing.id) selectedCustomer = null;
-                        updateCustomerStatus();
-                        renderCustomers(customerSearch == null ? "" : customerSearch.getText().toString());
-                    }).show());
-        }
-        b.show();
-    }
-
-    private void showCustomerPicker() {
-        List<AppDb.Customer> list = db.searchCustomers("");
-        String[] names = new String[list.size() + 1];
-        names[0] = "بدون مشتری";
-        for (int i = 0; i < list.size(); i++) {
-            AppDb.Customer c = list.get(i);
-            names[i + 1] = c.name + (c.phone == null || c.phone.isEmpty() ? "" : " — " + c.phone);
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("انتخاب مشتری")
-                .setItems(names, (d, which) -> {
-                    selectedCustomer = which == 0 ? null : list.get(which - 1);
-                    if (selectedCustomerText != null) selectedCustomerText.setText(customerText());
-                })
-                .setNegativeButton("بستن", null)
-                .show();
-    }
-
-    private String customerText() {
-        if (selectedCustomer == null) return "مشتری: انتخاب نشده";
-        return "مشتری: " + selectedCustomer.name + (selectedCustomer.phone == null || selectedCustomer.phone.isEmpty() ? "" : " | " + selectedCustomer.phone);
-    }
-
-    private int reservedQty(long productId) {
-        int n = 0;
-        for (AppDb.SaleLine l : invoiceItems) if (l.productId == productId) n += l.qty;
-        return n;
-    }
-
-    private void addToInvoice(AppDb.Product p, double price, String saleType) {
-        int reserved = reservedQty(p.id);
-        if (p.stock <= reserved) {
-            toast("موجودی کافی نیست. موجودی: " + p.stock);
-            return;
-        }
-        for (AppDb.SaleLine l : invoiceItems) {
-            if (l.productId == p.id && l.saleType.equals(saleType) && Math.abs(l.unitPrice - price) < 0.0001) {
-                l.qty++;
-                updateInvoiceTab();
-                toast("به فاکتور اضافه شد");
-                if (currentScreen == 0) renderProducts(productSearch == null ? "" : productSearch.getText().toString());
-                return;
-            }
-        }
-        invoiceItems.add(new AppDb.SaleLine(p.id, p.name, price, 1, saleType));
-        updateInvoiceTab();
-        toast("به فاکتور اضافه شد");
-        if (currentScreen == 0) renderProducts(productSearch == null ? "" : productSearch.getText().toString());
-    }
-
-    private void renderInvoice() {
-        if (invoiceItemsContainer == null) return;
-        invoiceItemsContainer.removeAllViews();
-        if (invoiceItems.isEmpty()) {
-            TextView empty = label(lastSaleLines == null ? "فاکتور خالی است. از بخش کالا، محصول را به فاکتور اضافه کنید." : "فاکتور جدید خالی است. آخرین فروش ثبت‌شده برای صدور PDF هنوز در دسترس است.", 15, Color.GRAY, false);
-            empty.setGravity(Gravity.CENTER);
-            empty.setPadding(dp(8), dp(25), dp(8), dp(25));
-            invoiceItemsContainer.addView(empty);
-        } else {
-            for (int i = 0; i < invoiceItems.size(); i++) invoiceItemsContainer.addView(invoiceLine(i));
-        }
-        if (invoiceTotal != null) invoiceTotal.setText("جمع کل: " + money(invoiceGrandTotal()));
-        updateInvoiceTab();
-    }
-
-    private View invoiceLine(int index) {
-        AppDb.SaleLine item = invoiceItems.get(index);
-        LinearLayout card = card();
-        AppDb.Product current = db.getProduct(item.productId);
-        card.addView(label(item.productName + " — " + item.saleType, 17, Color.rgb(20, 36, 64), true));
-        card.addView(label("قیمت واحد: " + money(item.unitPrice) + " | جمع: " + money(item.unitPrice * item.qty), 14, Color.DKGRAY, false), lp(-1, -2, 0, 5, 0, 2));
-        if (current != null) card.addView(label("موجودی فعلی: " + current.stock, 13, Color.GRAY, false));
-
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        row.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-
-        Button plus = smallButton("+");
-        plus.setOnClickListener(v -> {
-            AppDb.Product p = db.getProduct(item.productId);
-            if (p == null || reservedQty(item.productId) >= p.stock) { toast("بیشتر از موجودی انبار نمی‌توان اضافه کرد"); return; }
-            item.qty++;
-            renderInvoice();
-        });
-        row.addView(plus, new LinearLayout.LayoutParams(dp(55), dp(42)));
-
-        TextView qty = label("تعداد: " + item.qty, 16, Color.rgb(20, 36, 64), true);
-        qty.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams qp = new LinearLayout.LayoutParams(0, dp(42), 1);
-        qp.setMargins(dp(4), 0, dp(4), 0);
-        row.addView(qty, qp);
-
-        Button minus = smallButton("−");
-        minus.setOnClickListener(v -> {
-            if (item.qty > 1) item.qty--; else invoiceItems.remove(item);
-            renderInvoice();
-            updateInvoiceTab();
-        });
-        row.addView(minus, new LinearLayout.LayoutParams(dp(55), dp(42)));
-
-        Button del = smallButton("حذف");
-        del.setOnClickListener(v -> {
-            invoiceItems.remove(item);
-            renderInvoice();
-            updateInvoiceTab();
-        });
-        LinearLayout.LayoutParams dpb = new LinearLayout.LayoutParams(dp(72), dp(42));
-        dpb.setMargins(dp(5), 0, 0, 0);
-        row.addView(del, dpb);
-        card.addView(row, lp(-1, -2, 0, 7, 0, 0));
-        return card;
-    }
-
-    private double invoiceGrandTotal() {
-        double total = 0;
-        for (AppDb.SaleLine i : invoiceItems) total += i.unitPrice * i.qty;
-        return total;
-    }
-
-    private ArrayList<AppDb.SaleLine> copyLines(List<AppDb.SaleLine> src) {
-        ArrayList<AppDb.SaleLine> out = new ArrayList<>();
-        for (AppDb.SaleLine l : src) out.add(new AppDb.SaleLine(l.productId, l.productName, l.unitPrice, l.qty, l.saleType));
-        return out;
-    }
-
-    private AppDb.Customer copyCustomer(AppDb.Customer c) {
-        return c == null ? null : new AppDb.Customer(c.id, c.name, c.phone, c.address);
-    }
-
-    private void saveSale() {
-        if (invoiceItems.isEmpty()) { toast("فاکتور خالی است"); return; }
-        try {
-            ArrayList<AppDb.SaleLine> snapshot = copyLines(invoiceItems);
-            AppDb.Customer customerSnapshot = copyCustomer(selectedCustomer);
-            long now = System.currentTimeMillis();
-            db.saveSale(currentInvoiceNo, customerSnapshot, snapshot);
-            lastSaleLines = snapshot;
-            lastSaleCustomer = customerSnapshot;
-            lastSaleInvoiceNo = currentInvoiceNo;
-            lastSaleTime = now;
-            invoiceItems.clear();
-            selectedCustomer = null;
-            currentInvoiceNo = newInvoiceNo();
-            toast("فروش ثبت شد و موجودی انبار کسر شد");
-            renderInvoice();
-            if (invoiceNoText != null) invoiceNoText.setText("شماره فاکتور: " + currentInvoiceNo);
-            if (selectedCustomerText != null) selectedCustomerText.setText(customerText());
-        } catch (Exception e) {
-            toast("ثبت فروش انجام نشد: " + e.getMessage());
-        }
-    }
-
-    private void clearInvoice() {
-        invoiceItems.clear();
-        selectedCustomer = null;
-        currentInvoiceNo = newInvoiceNo();
-        renderInvoice();
-        if (invoiceNoText != null) invoiceNoText.setText("شماره فاکتور: " + currentInvoiceNo);
-        if (selectedCustomerText != null) selectedCustomerText.setText(customerText());
-    }
-
-    private void requestSavePdf() {
-        if (!invoiceItems.isEmpty()) {
-            pendingPdfLines = copyLines(invoiceItems);
-            pendingPdfCustomer = copyCustomer(selectedCustomer);
-            pendingPdfInvoiceNo = currentInvoiceNo;
-            pendingPdfTime = System.currentTimeMillis();
-        } else if (lastSaleLines != null && !lastSaleLines.isEmpty()) {
-            pendingPdfLines = copyLines(lastSaleLines);
-            pendingPdfCustomer = copyCustomer(lastSaleCustomer);
-            pendingPdfInvoiceNo = lastSaleInvoiceNo;
-            pendingPdfTime = lastSaleTime;
-            toast("PDF آخرین فروش ثبت‌شده صادر می‌شود");
-        } else {
-            toast("فاکتوری برای صدور PDF وجود ندارد");
-            return;
-        }
-        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("application/pdf");
-        i.putExtra(Intent.EXTRA_TITLE, "invoice_" + pendingPdfInvoiceNo + ".pdf");
-        startActivityForResult(i, SAVE_PDF);
-    }
-
-    private void writePdf(Uri uri) {
-        try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-            if (out == null) throw new Exception("امکان ساخت فایل وجود ندارد");
-            InvoicePdf.write(out, pendingPdfInvoiceNo, pendingPdfCustomer, pendingPdfLines, pendingPdfTime);
-            runOnUiThread(() -> toast("فایل PDF فاکتور ذخیره شد"));
-        } catch (Exception e) {
-            runOnUiThread(() -> toast("خطا در ساخت PDF: " + e.getMessage()));
-        }
-    }
-
-    private void pickFile() {
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        startActivityForResult(i, PICK_XLSX);
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == PICK_XLSX && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            Uri uri = data.getData();
-            if (productStatus != null) productStatus.setText("در حال خواندن Excel...");
-            new Thread(() -> importXlsx(uri)).start();
-            return;
-        }
-        if (requestCode == SAVE_PDF && resultCode == RESULT_OK && data != null && data.getData() != null) {
-            Uri uri = data.getData();
-            new Thread(() -> writePdf(uri)).start();
-        }
-    }
-
-    private void importXlsx(Uri uri) {
-        try {
-            File tmp = new File(getCacheDir(), "import_" + System.currentTimeMillis() + ".xlsx");
-            try (InputStream in = getContentResolver().openInputStream(uri); FileOutputStream out = new FileOutputStream(tmp)) {
-                if (in == null) throw new Exception("امکان باز کردن فایل وجود ندارد");
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            }
-            List<AppDb.Product> items = XlsxReader.read(tmp);
-            tmp.delete();
-            if (items.isEmpty()) throw new Exception("کالایی در فایل پیدا نشد");
-            db.importProducts(items);
-            runOnUiThread(() -> {
-                updateProductStatus();
-                renderProducts(productSearch == null ? "" : productSearch.getText().toString());
-                toast(items.size() + " ردیف Excel بروزرسانی/اضافه شد");
-            });
-        } catch (Exception e) {
-            runOnUiThread(() -> {
-                updateProductStatus();
-                toast("خطا در خواندن Excel: " + e.getMessage());
-            });
-        }
-    }
-
-    private String newInvoiceNo() {
-        return String.valueOf(System.currentTimeMillis());
-    }
-
-    private LinearLayout card() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(11), dp(12), dp(11));
-        card.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(13));
-        bg.setStroke(dp(1), Color.rgb(225, 229, 236));
-        card.setBackground(bg);
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1, -2);
-        cp.setMargins(0, 0, 0, dp(9));
-        card.setLayoutParams(cp);
-        return card;
-    }
-
-    private LinearLayout formLayout() {
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        form.setPadding(dp(18), dp(8), dp(18), dp(8));
-        form.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        return form;
-    }
-
-    private EditText field(String hint, String value, int inputType) {
-        EditText e = new EditText(this);
-        e.setHint(hint);
-        e.setText(value == null ? "" : value);
-        e.setInputType(inputType);
-        e.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        e.setPadding(dp(10), dp(4), dp(10), dp(4));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(54));
-        p.setMargins(0, 0, 0, dp(7));
-        e.setLayoutParams(p);
-        return e;
-    }
-
-    private EditText searchBox(String hint) {
-        EditText e = new EditText(this);
-        e.setHint(hint);
-        e.setSingleLine(true);
-        e.setTextSize(16);
-        e.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
-        e.setPadding(dp(12), 0, dp(12), 0);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setStroke(dp(1), Color.rgb(210, 216, 226));
-        bg.setCornerRadius(dp(12));
-        e.setBackground(bg);
-        return e;
-    }
-
-    private TextView label(String text, float size, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(text);
-        t.setTextSize(size);
-        t.setTextColor(color);
-        t.setGravity(Gravity.RIGHT);
-        if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        return t;
-    }
-
-    private Button smallButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextSize(12);
-        return b;
-    }
-
-    private LinearLayout.LayoutParams lp(int w, int h, int l, int t, int r, int b) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(w, h);
-        p.setMargins(dp(l), dp(t), dp(r), dp(b));
-        return p;
-    }
-
-    private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    private double val(EditText e) {
-        return parseNumber(e.getText().toString());
-    }
-
-    private int intVal(EditText e) {
-        return Math.max(0, (int) Math.round(parseNumber(e.getText().toString())));
-    }
-
-    private double parseNumber(String raw) {
-        if (raw == null) return 0;
-        String s = raw.trim().replace(",", "").replace("٬", "").replace(" ", "");
-        StringBuilder x = new StringBuilder();
-        for (int i = 0; i < s.length(); i++) {
-            char ch = s.charAt(i);
-            if (ch >= '۰' && ch <= '۹') x.append((char) ('0' + ch - '۰'));
-            else if (ch >= '٠' && ch <= '٩') x.append((char) ('0' + ch - '٠'));
-            else x.append(ch);
-        }
-        try { return Double.parseDouble(x.toString()); } catch (Exception ignored) { return 0; }
-    }
-
-    private String money(double v) {
-        return new DecimalFormat("#,###.##").format(v);
-    }
-
-    private String plain(double v) {
-        if (Math.rint(v) == v) return String.valueOf((long) v);
-        return String.valueOf(v);
-    }
-
-    private String number(long v) {
-        return new DecimalFormat("#,###").format(v);
-    }
-
-    private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_LONG).show();
-    }
-
-    private abstract static class SimpleWatcher implements TextWatcher {
-        public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-        public void afterTextChanged(Editable s) {}
-    }
+    private void screenTitle(String title){content.removeAllViews();LinearLayout top=row();top.addView(label(title,20,Color.rgb(40,40,40),true),new LinearLayout.LayoutParams(0,dp(46),1));Button home=btn("خانه",v->showDashboard());top.addView(home,new LinearLayout.LayoutParams(dp(82),dp(44)));content.addView(top,lp(-1,-2,0,0,0,8));}
+    private void addMenuRow(LinearLayout parent,String a,View.OnClickListener al,String b,View.OnClickListener bl){LinearLayout r=row();r.addView(menuBtn(a,al),weight());r.addView(menuBtn(b,bl),weightM());parent.addView(r,lp(-1,dp(58),0,0,0,7));}
+    private Button menuBtn(String s,View.OnClickListener l){Button b=btn(s,l);b.setTextSize(14);return b;}
+    private LinearLayout metric(String title,String value){LinearLayout c=new LinearLayout(this);c.setOrientation(LinearLayout.VERTICAL);c.setPadding(dp(12),dp(10),dp(12),dp(10));c.setBackground(roundBg(Color.WHITE,Color.rgb(226,226,220),14));c.addView(label(title,12,Color.GRAY,false));c.addView(label(value,17,Color.rgb(60,55,35),true),lp(-1,-2,0,4,0,0));return c;}
+    private LinearLayout card(){LinearLayout c=new LinearLayout(this);c.setOrientation(LinearLayout.VERTICAL);c.setPadding(dp(12),dp(10),dp(12),dp(10));c.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);c.setBackground(roundBg(Color.WHITE,Color.rgb(226,226,222),13));return c;}
+    private LinearLayout row(){LinearLayout r=new LinearLayout(this);r.setOrientation(LinearLayout.HORIZONTAL);r.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);return r;}
+    private LinearLayout form(){LinearLayout f=new LinearLayout(this);f.setOrientation(LinearLayout.VERTICAL);f.setPadding(dp(10),dp(8),dp(10),dp(8));f.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);return f;}
+    private ScrollView scrollWrap(View v){ScrollView s=new ScrollView(this);s.addView(v);return s;}
+    private void addFields(LinearLayout f,EditText... es){for(EditText e:es)f.addView(e,lp(-1,dp(48),0,0,0,5));}
+    private EditText input(String hint,int type){EditText e=new EditText(this);e.setHint(hint);e.setSingleLine(true);e.setTextSize(15);e.setInputType(type);e.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);e.setPadding(dp(10),0,dp(10),0);e.setBackground(roundBg(Color.WHITE,Color.rgb(210,210,205),10));return e;}
+    private EditText num(String hint){return input(hint,InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);}
+    private EditText intNum(String hint){return input(hint,InputType.TYPE_CLASS_NUMBER);}
+    private EditText searchBox(String h){return input(h,InputType.TYPE_CLASS_TEXT);}
+    private TextView label(String s,float size,int color,boolean bold){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);if(bold)t.setTypeface(Typeface.DEFAULT,Typeface.BOLD);return t;}
+    private TextView empty(String s){TextView t=label(s,14,Color.GRAY,false);t.setGravity(Gravity.CENTER);t.setPadding(0,dp(25),0,dp(25));return t;}
+    private Button btn(String s,View.OnClickListener l){Button b=new Button(this);b.setText(s);b.setTextSize(13);if(l!=null)b.setOnClickListener(l);return b;}
+    private GradientDrawable roundBg(int fill,int stroke,int radius){GradientDrawable g=new GradientDrawable();g.setColor(fill);g.setCornerRadius(dp(radius));if(stroke!=0)g.setStroke(dp(1),stroke);return g;}
+    private LinearLayout.LayoutParams lp(int w,int h,int l,int t,int r,int b){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(w,h);p.setMargins(dp(l),dp(t),dp(r),dp(b));return p;}
+    private LinearLayout.LayoutParams weight(){return new LinearLayout.LayoutParams(0,-1,1);}
+    private LinearLayout.LayoutParams weightM(){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMargins(dp(6),0,0,0);return p;}
+    private int dp(int v){return(int)(v*getResources().getDisplayMetrics().density+.5f);}
+    private TextWatcher watcher(Runnable r){return new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int b,int c){r.run();}public void afterTextChanged(Editable e){}};}
+    private void confirm(String title,String msg,Runnable yes){new AlertDialog.Builder(this).setTitle(title).setMessage(msg).setNegativeButton("انصراف",null).setPositiveButton("تأیید",(d,w)->yes.run()).show();}
+    private void toast(String s){Toast.makeText(this,s==null?"خطا":s,Toast.LENGTH_LONG).show();}
+    private double val(EditText e){try{return Double.parseDouble(e.getText().toString().trim().replace(",",""));}catch(Exception x){return 0;}}
+    private int ival(EditText e){try{return Integer.parseInt(e.getText().toString().trim());}catch(Exception x){return 0;}}
+    private String money(double v){return new DecimalFormat("#,###.##").format(v);}
+    private String raw(double v){return Math.rint(v)==v?String.valueOf((long)v):new DecimalFormat("0.##").format(v);}
+    private String nz(String s){return s==null||s.trim().isEmpty()?"—":s;}
+    private String date(long t){return new SimpleDateFormat("yyyy/MM/dd HH:mm",Locale.US).format(new Date(t));}
+    private String newNo(String prefix){return prefix+new SimpleDateFormat("yyMMddHHmmss",Locale.US).format(new Date());}
+    private String typeFa(String t){return t.equals("RECEIPT")?"دریافت":t.equals("PAYMENT")?"پرداخت":t.equals("INCOME")?"درآمد":"هزینه";}
+    private double total(List<AppDb.SaleLine> l){double s=0;for(AppDb.SaleLine x:l)s+=x.unitPrice*x.qty;return s;}
+    private ArrayList<AppDb.SaleLine> copyLines(List<AppDb.SaleLine> src){ArrayList<AppDb.SaleLine> o=new ArrayList<>();for(AppDb.SaleLine l:src)o.add(new AppDb.SaleLine(l.productId,l.productName,l.unitPrice,l.qty,l.saleType));return o;}
+    private void copy(InputStream in,OutputStream out)throws Exception{if(in==null||out==null)throw new Exception("فایل قابل دسترسی نیست");try(InputStream i=in;OutputStream o=out){byte[] b=new byte[8192];int n;while((n=i.read(b))>0)o.write(b,0,n);o.flush();}}
 }
