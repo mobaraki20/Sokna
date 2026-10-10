@@ -11,6 +11,156 @@ def replace_between(start_sig, next_sig, body):
     if n != 1:
         raise SystemExit(f'patch target not found: {start_sig}')
 
+def replace_once(old, new):
+    global s
+    if old not in s:
+        raise SystemExit(f'replace target not found: {old[:80]}')
+    s = s.replace(old, new, 1)
+
+# Lightweight Fluent / Windows 11 imports and palette.
+replace_once('import android.content.Intent;\n', 'import android.content.Intent;\nimport android.content.res.ColorStateList;\n')
+replace_once('import android.graphics.drawable.GradientDrawable;\n', 'import android.graphics.drawable.GradientDrawable;\nimport android.graphics.drawable.RippleDrawable;\n')
+replace_once('import android.os.Bundle;\n', 'import android.os.Bundle;\nimport android.os.Handler;\nimport android.os.Looper;\n')
+replace_once('import android.view.View;\n', 'import android.view.View;\nimport android.view.animation.DecelerateInterpolator;\n')
+replace_once(
+    '    private AppDb db;\n',
+    '''    private AppDb db;
+    private static final int WIN_BG = Color.rgb(243,243,243);
+    private static final int WIN_SURFACE = Color.rgb(251,251,251);
+    private static final int WIN_CARD = Color.WHITE;
+    private static final int WIN_TEXT = Color.rgb(28,28,28);
+    private static final int WIN_MUTED = Color.rgb(96,96,96);
+    private static final int WIN_BORDER = Color.rgb(225,225,225);
+    private static final int WIN_ACCENT = Color.rgb(0,103,192);
+    private static final int WIN_ACCENT_SOFT = Color.rgb(230,242,252);
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingSearch;
+'''
+)
+
+replace_between(
+    '    @Override protected void onCreate(Bundle b){',
+    'private View buildRoot(){',
+    '''    @Override protected void onCreate(Bundle b){
+        super.onCreate(b);
+        getWindow().setStatusBarColor(WIN_SURFACE);
+        getWindow().setNavigationBarColor(WIN_SURFACE);
+        int flags=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if(android.os.Build.VERSION.SDK_INT>=26) flags|=View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        getWindow().getDecorView().setSystemUiVisibility(flags);
+        db=new AppDb(this);
+        saleNo=newNo("F");
+        purchaseNo=newNo("K");
+        setContentView(buildRoot());
+        showDashboard();
+    }
+'''
+)
+
+replace_between(
+    '    private View buildRoot(){',
+    'private void showDashboard(){',
+    '''    private View buildRoot(){
+        LinearLayout root=new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(12),dp(10),dp(12),dp(10));
+        root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        root.setBackgroundColor(WIN_BG);
+
+        LinearLayout brand=new LinearLayout(this);
+        brand.setOrientation(LinearLayout.HORIZONTAL);
+        brand.setGravity(Gravity.CENTER_VERTICAL);
+        brand.setPadding(dp(16),dp(10),dp(16),dp(10));
+        brand.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        brand.setBackground(roundBg(WIN_SURFACE,WIN_BORDER,16));
+        brand.setElevation(dp(1));
+
+        LinearLayout names=new LinearLayout(this);
+        names.setOrientation(LinearLayout.VERTICAL);
+        TextView title=label("System Setayesh",19,WIN_TEXT,true);
+        title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        TextView sub=label("مدیریت بازرگانی و حسابداری",11,WIN_MUTED,false);
+        names.addView(title);
+        names.addView(sub,lp(-1,-2,0,1,0,0));
+        brand.addView(names,new LinearLayout.LayoutParams(0,-2,1));
+
+        TextView badge=label("Windows 11 UI",10,WIN_ACCENT,true);
+        badge.setGravity(Gravity.CENTER);
+        badge.setPadding(dp(10),dp(5),dp(10),dp(5));
+        badge.setBackground(roundBg(WIN_ACCENT_SOFT,0,20));
+        brand.addView(badge);
+
+        root.addView(brand,lp(-1,-2,0,0,0,10));
+
+        content=new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        root.addView(content,new LinearLayout.LayoutParams(-1,0,1));
+        return root;
+    }
+'''
+)
+
+replace_between(
+    '    private void showDashboard(){',
+    'private void showProducts(){',
+    '''    private void showDashboard(){
+        content.removeAllViews();
+        ScrollView sc=new ScrollView(this);
+        sc.setFillViewport(true);
+        sc.setClipToPadding(false);
+        LinearLayout box=new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        box.setPadding(0,0,0,dp(10));
+        sc.addView(box,new ScrollView.LayoutParams(-1,-2));
+        content.addView(sc,new LinearLayout.LayoutParams(-1,0,1));
+
+        AppDb.Summary s=db.summary();
+
+        LinearLayout hero=card();
+        hero.setBackground(roundBg(WIN_ACCENT,0,18));
+        hero.setPadding(dp(16),dp(14),dp(16),dp(14));
+        TextView h=label("داشبورد مدیریتی",22,Color.WHITE,true);
+        h.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        hero.addView(h);
+        TextView hs=label("نمای سریع وضعیت کسب‌وکار",12,Color.rgb(225,240,252),false);
+        hero.addView(hs,lp(-1,-2,0,2,0,8));
+        TextView cash=label("مانده نقد و بانک   "+money(s.cash),17,Color.WHITE,true);
+        hero.addView(cash);
+        box.addView(hero,lp(-1,-2,0,0,0,10));
+
+        LinearLayout r1=row();
+        r1.addView(metric("فروش کل",money(s.sales)),weight());
+        r1.addView(metric("خرید کل",money(s.purchases)),weightM());
+        box.addView(r1,lp(-1,-2,0,0,0,8));
+
+        LinearLayout r2=row();
+        r2.addView(metric("مطالبات",money(s.receivables)),weight());
+        r2.addView(metric("بدهی‌ها",money(s.payables)),weightM());
+        box.addView(r2,lp(-1,-2,0,0,0,8));
+
+        LinearLayout r3=row();
+        r3.addView(metric("ارزش موجودی",money(s.stockValue)),weight());
+        r3.addView(metric("کمبود موجودی",String.valueOf(s.lowStock)),weightM());
+        box.addView(r3,lp(-1,-2,0,0,0,14));
+
+        box.addView(sectionTitle("عملیات اصلی"),lp(-1,-2,0,0,0,7));
+        addMenuRow(box,"کالا و انبار",v->showProducts(),"فروش",v->showSale());
+        addMenuRow(box,"خرید",v->showPurchase(),"مشتریان",v->showCustomers());
+        addMenuRow(box,"تأمین‌کنندگان",v->showSuppliers(),"ویزیتورها",v->showVisitors());
+        addMenuRow(box,"دریافت و پرداخت",v->showFinance(),"گزارش‌ها",v->showReports());
+        addMenuRow(box,"بکاپ و بازیابی",v->showBackup(),"ورود Excel",v->pickExcel());
+
+        TextView counts=label("کالا "+s.productCount+"   •   مشتری "+s.customerCount+"   •   تأمین‌کننده "+s.supplierCount,12,WIN_MUTED,false);
+        counts.setGravity(Gravity.CENTER);
+        box.addView(counts,lp(-1,-2,0,10,0,6));
+        animateContent();
+    }
+'''
+)
+
+# Keep the dialog fixes while the source is migrated.
 replace_between(
     '    private void productDialog(AppDb.Product p){',
     'private void showCustomers(){',
@@ -25,7 +175,8 @@ replace_between(
             showProducts();
         }).show();
     }
-''')
+'''
+)
 
 replace_between(
     '    private void customerDialog(AppDb.Customer c){',
@@ -40,7 +191,8 @@ replace_between(
             showCustomers();
         }).show();
     }
-''')
+'''
+)
 
 replace_between(
     '    private void supplierDialog(AppDb.Supplier s){',
@@ -55,7 +207,8 @@ replace_between(
             showSuppliers();
         }).show();
     }
-''')
+'''
+)
 
 replace_between(
     '    private void visitorDialog(AppDb.Visitor s){',
@@ -72,7 +225,8 @@ replace_between(
             showVisitors();
         }).show();
     }
-''')
+'''
+)
 
 replace_between(
     '    private void financeDialog(String type,String kind,long partyId,String partyName){',
@@ -85,6 +239,207 @@ replace_between(
             showFinance();
         }).show();
     }
-''')
+'''
+)
+
+# Replace the shared styling/helper region with lightweight Fluent UI primitives.
+replace_between(
+    '    private void screenTitle(String title){',
+    'private void confirm(String title,String msg,Runnable yes){',
+    '''    private void screenTitle(String title){
+        content.removeAllViews();
+        LinearLayout top=row();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(dp(2),dp(2),dp(2),dp(4));
+        TextView t=label(title,20,WIN_TEXT,true);
+        t.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        top.addView(t,new LinearLayout.LayoutParams(0,dp(48),1));
+        Button home=btn("خانه",v->showDashboard());
+        home.setTextColor(WIN_ACCENT);
+        top.addView(home,new LinearLayout.LayoutParams(dp(82),dp(44)));
+        content.addView(top,lp(-1,-2,0,0,0,8));
+        animateContent();
+    }
+
+    private TextView sectionTitle(String s){
+        TextView t=label(s,15,WIN_TEXT,true);
+        t.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        return t;
+    }
+
+    private void addMenuRow(LinearLayout parent,String a,View.OnClickListener al,String b,View.OnClickListener bl){
+        LinearLayout r=row();
+        r.addView(menuBtn(a,al),weight());
+        r.addView(menuBtn(b,bl),weightM());
+        parent.addView(r,lp(-1,dp(62),0,0,0,8));
+    }
+
+    private Button menuBtn(String s,View.OnClickListener l){
+        Button b=btn(s,l);
+        b.setTextSize(14);
+        b.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
+        b.setPadding(dp(14),0,dp(14),0);
+        b.setTextColor(WIN_TEXT);
+        b.setBackground(rippleBg(WIN_CARD,WIN_BORDER,14));
+        b.setElevation(dp(1));
+        return b;
+    }
+
+    private LinearLayout metric(String title,String value){
+        LinearLayout c=new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(13),dp(11),dp(13),dp(11));
+        c.setBackground(roundBg(WIN_CARD,WIN_BORDER,14));
+        c.setElevation(dp(1));
+        c.addView(label(title,11,WIN_MUTED,false));
+        TextView v=label(value,18,WIN_TEXT,true);
+        v.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        c.addView(v,lp(-1,-2,0,3,0,0));
+        return c;
+    }
+
+    private LinearLayout card(){
+        LinearLayout c=new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(14),dp(11),dp(14),dp(11));
+        c.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        c.setBackground(roundBg(WIN_CARD,WIN_BORDER,15));
+        c.setElevation(dp(1));
+        return c;
+    }
+
+    private LinearLayout row(){
+        LinearLayout r=new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        return r;
+    }
+
+    private LinearLayout form(){
+        LinearLayout f=new LinearLayout(this);
+        f.setOrientation(LinearLayout.VERTICAL);
+        f.setPadding(dp(10),dp(8),dp(10),dp(8));
+        f.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        f.setBackgroundColor(WIN_BG);
+        return f;
+    }
+
+    private ScrollView scrollWrap(View v){
+        ScrollView s=new ScrollView(this);
+        s.setFillViewport(true);
+        s.addView(v);
+        return s;
+    }
+
+    private void addFields(LinearLayout f,EditText... es){
+        for(EditText e:es)f.addView(e,lp(-1,dp(50),0,0,0,7));
+    }
+
+    private EditText input(String hint,int type){
+        EditText e=new EditText(this);
+        e.setHint(hint);
+        e.setHintTextColor(Color.rgb(125,125,125));
+        e.setTextColor(WIN_TEXT);
+        e.setSingleLine(true);
+        e.setTextSize(14);
+        e.setTypeface(Typeface.create("sans-serif",Typeface.NORMAL));
+        e.setInputType(type);
+        e.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
+        e.setPadding(dp(12),0,dp(12),0);
+        e.setBackground(roundBg(WIN_SURFACE,WIN_BORDER,11));
+        return e;
+    }
+
+    private EditText num(String hint){return input(hint,InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);}
+    private EditText intNum(String hint){return input(hint,InputType.TYPE_CLASS_NUMBER);}
+    private EditText searchBox(String h){
+        EditText e=input("⌕  "+h,InputType.TYPE_CLASS_TEXT);
+        e.setBackground(roundBg(Color.WHITE,WIN_BORDER,14));
+        return e;
+    }
+
+    private TextView label(String s,float size,int color,boolean bold){
+        TextView t=new TextView(this);
+        t.setText(s);
+        t.setTextSize(size);
+        if(color==Color.DKGRAY) color=WIN_TEXT;
+        else if(color==Color.GRAY) color=WIN_MUTED;
+        t.setTextColor(color);
+        t.setGravity(Gravity.RIGHT|Gravity.CENTER_VERTICAL);
+        t.setTypeface(Typeface.create(bold?"sans-serif-medium":"sans-serif",Typeface.NORMAL));
+        return t;
+    }
+
+    private TextView empty(String s){
+        TextView t=label(s,13,WIN_MUTED,false);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(0,dp(28),0,dp(28));
+        return t;
+    }
+
+    private Button btn(String s,View.OnClickListener l){
+        Button b=new Button(this);
+        b.setText(s);
+        b.setTextSize(13);
+        b.setTextColor(WIN_TEXT);
+        b.setAllCaps(false);
+        b.setGravity(Gravity.CENTER);
+        b.setMinHeight(0);
+        b.setMinWidth(0);
+        b.setPadding(dp(12),0,dp(12),0);
+        b.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+        b.setBackground(rippleBg(WIN_SURFACE,WIN_BORDER,11));
+        b.setElevation(0);
+        if(l!=null)b.setOnClickListener(l);
+        return b;
+    }
+
+    private RippleDrawable rippleBg(int fill,int stroke,int radius){
+        GradientDrawable g=roundBg(fill,stroke,radius);
+        return new RippleDrawable(ColorStateList.valueOf(Color.argb(28,0,103,192)),g,null);
+    }
+
+    private GradientDrawable roundBg(int fill,int stroke,int radius){
+        GradientDrawable g=new GradientDrawable();
+        g.setColor(fill);
+        g.setCornerRadius(dp(radius));
+        if(stroke!=0)g.setStroke(dp(1),stroke);
+        return g;
+    }
+
+    private LinearLayout.LayoutParams lp(int w,int h,int l,int t,int r,int b){
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(w,h);
+        p.setMargins(dp(l),dp(t),dp(r),dp(b));
+        return p;
+    }
+
+    private LinearLayout.LayoutParams weight(){return new LinearLayout.LayoutParams(0,-1,1);}
+    private LinearLayout.LayoutParams weightM(){
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);
+        p.setMargins(dp(7),0,0,0);
+        return p;
+    }
+
+    private int dp(int v){return(int)(v*getResources().getDisplayMetrics().density+.5f);}
+
+    private TextWatcher watcher(Runnable r){
+        return new TextWatcher(){
+            public void beforeTextChanged(CharSequence s,int st,int c,int a){}
+            public void onTextChanged(CharSequence s,int st,int b,int c){
+                if(pendingSearch!=null)uiHandler.removeCallbacks(pendingSearch);
+                pendingSearch=r;
+                uiHandler.postDelayed(pendingSearch,110);
+            }
+            public void afterTextChanged(Editable e){}
+        };
+    }
+
+    private void animateContent(){
+        content.setAlpha(0f);
+        content.setTranslationY(dp(6));
+        content.animate().alpha(1f).translationY(0f).setDuration(130).setInterpolator(new DecelerateInterpolator()).start();
+    }
+'''
+)
 
 p.write_text(s)
